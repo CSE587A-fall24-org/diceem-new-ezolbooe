@@ -2,6 +2,8 @@ from typing import List, Union, Tuple, Optional
 import logging
 import numpy as np
 from numpy.typing import NDArray
+import math
+from operator import add
 from cse587Autils.DiceObjects.Die import Die, safe_exponentiate
 from cse587Autils.DiceObjects.BagOfDice import BagOfDice
 
@@ -59,14 +61,12 @@ def diceEM(experiment_data: List[NDArray[np.int_]],  # pylint: disable=C0103
         logging.debug("Likelihood: %s",
                       bag_of_dice.likelihood(experiment_data))
 
-        # YOUR CODE HERE. SET REQUIRED VARIABLES BY CALLING e-step AND m-step.
         # E-step: compute the expected counts given current parameters        
-  
+        expected_counts_by_die = e_step(experiment_data, bag_of_dice)
         # M-step: update the parameters given the expected counts
-      
+        updated_bag_of_dice = m_step(expected_counts_by_die)
         prev_bag_of_dice: BagOfDice = bag_of_dice
         bag_of_dice = updated_bag_of_dice
-
     return iterations, bag_of_dice
 
 def e_step(experiment_data: List[NDArray[np.int_]],
@@ -106,9 +106,19 @@ def e_step(experiment_data: List[NDArray[np.int_]],
     # the current draw to get the expected counts for each die type on this draw.
     # To get the total expected counts for each type, you sum the expected
     # counts for each type over all the draws.  
-
-    # PUT YOUR CODE HERE, FOLLOWING THE DIRECTIONS ABOVE
-
+    total_expected_counts_die1 = [0]*len(bag_of_dice.dice[0].face_probs)
+    total_expected_counts_die2 = [0]*len(bag_of_dice.dice[1].face_probs)
+    for i in range(len(experiment_data)):
+        draw = experiment_data[i]
+        posterior_die1 = dice_posterior(draw.tolist(), bag_of_dice.die_priors, 
+                                         bag_of_dice.dice)
+        posterior_die2 = 1 - posterior_die1
+        expected_counts_die1 = [j*posterior_die1 for j in draw]
+        expected_counts_die2 = [j*posterior_die2 for j in draw]
+        total_expected_counts_die1 = list(map(add, total_expected_counts_die1, expected_counts_die1))
+        total_expected_counts_die2 = list(map(add, total_expected_counts_die2, expected_counts_die2))
+    expected_counts[0] = total_expected_counts_die1
+    expected_counts[1] = total_expected_counts_die2
     return expected_counts
 
 
@@ -133,11 +143,15 @@ def m_step(expected_counts_by_die: NDArray[np.float_]):
     """
     updated_type_1_frequency = np.sum(expected_counts_by_die[0])
     updated_type_2_frequency = np.sum(expected_counts_by_die[1])
-
+    updated_total = updated_type_1_frequency + updated_type_2_frequency
     # REPLACE EACH NONE BELOW WITH YOUR CODE. 
-    updated_priors = None
-    updated_type_1_face_probs = None
-    updated_type_2_face_probs = None
+    new_prior_type1 = updated_type_1_frequency / (updated_total)
+    new_prior_type2 = updated_type_2_frequency / (updated_total)
+    updated_priors = [new_prior_type1, new_prior_type2]
+    updated_type_1_face_probs = [x / updated_type_1_frequency 
+                                 for x in expected_counts_by_die[0]]
+    updated_type_2_face_probs = [x / updated_type_2_frequency
+                                 for x in expected_counts_by_die[1]]
     
     updated_bag_of_dice = BagOfDice(updated_priors,
                                     [Die(updated_type_1_face_probs),
@@ -182,3 +196,38 @@ def generate_sample(die_type_counts: Tuple[int],
     # array of num_draws arrays each containing rolls_per_draw rolls.
 
     return list(map(roll, die_types_drawn))
+
+def dice_posterior(sample_draw: List[int], 
+                   die_type_probs: List[float],
+                   dice: List[Die]):
+    """Calculates the posterior probability of a type 1 vs a type 2 die,
+    based on the number of times each face appears in the draw, and the
+    relative numbers of type 1 and type 2 dice in the bag, as well as the
+    face probabilities for type 1 and type 2 dice. The single number returned
+    is the posterior probability of the Type 1 die. Note: we expect a BagOfDice
+    object with only two dice.
+
+    """
+    # Requiring only two dice with the same number of faces simplifies the
+    # problem a bit.
+    if len(dice) != 2:
+        raise ValueError('This code requires exactly 2 dice')
+    if len(dice[0].face_probs) != len(dice[1].face_probs):
+        raise ValueError('This code requires two dice with the same number of faces')
+    if len(sample_draw) != len(dice[1].face_probs):
+        raise ValueError('The sample draw is a list of observed counts for the \
+                         faces. Its length must be equal to the number of faces \
+                         on the dice.')
+    num_draws = sum(sample_draw)
+    pmf_coefficient = float(math.factorial(num_draws))
+    for draw in sample_draw:
+        pmf_coefficient = pmf_coefficient/math.factorial(draw)
+    prob_outcome_die1 = pmf_coefficient
+    for i in range(len(sample_draw)):
+        prob_outcome_die1 = prob_outcome_die1*(dice[0].face_probs[i]**sample_draw[i])
+    prob_outcome_die2 = pmf_coefficient
+    for i in range(len(sample_draw)):
+        prob_outcome_die2 = prob_outcome_die2*(dice[1].face_probs[i]**sample_draw[i])
+    prob_outcome = prob_outcome_die1*die_type_probs[0] + prob_outcome_die2*die_type_probs[1]
+    prob_die1 = prob_outcome_die1*die_type_probs[0]/prob_outcome
+    return prob_die1
